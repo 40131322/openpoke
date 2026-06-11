@@ -50,12 +50,12 @@ class Settings(BaseModel):
     server_host: str = Field(default=os.getenv("OPENPOKE_HOST", "0.0.0.0"))
     server_port: int = Field(default=_env_int("OPENPOKE_PORT", 8001))
 
-    # LLM model selection
-    interaction_agent_model: str = Field(default="google/gemma-4-31b-it:free")
-    execution_agent_model: str = Field(default="google/gemma-4-31b-it:free")
-    execution_agent_search_model: str = Field(default="google/gemma-4-31b-it:free")
-    summarizer_model: str = Field(default="google/gemma-4-31b-it:free")
-    email_classifier_model: str = Field(default="google/gemma-4-31b-it:free")
+    # LLM model selection (each overridable via the matching env var)
+    interaction_agent_model: str = Field(default=os.getenv("INTERACTION_AGENT_MODEL", "google/gemma-4-31b-it:free"))
+    execution_agent_model: str = Field(default=os.getenv("EXECUTION_AGENT_MODEL", "google/gemma-4-31b-it:free"))
+    execution_agent_search_model: str = Field(default=os.getenv("EXECUTION_AGENT_SEARCH_MODEL", "google/gemma-4-31b-it:free"))
+    summarizer_model: str = Field(default=os.getenv("SUMMARIZER_MODEL", "google/gemma-4-31b-it:free"))
+    email_classifier_model: str = Field(default=os.getenv("EMAIL_CLASSIFIER_MODEL", "google/gemma-4-31b-it:free"))
 
     # Credentials / integrations
     openrouter_api_key: Optional[str] = Field(default=os.getenv("OPENROUTER_API_KEY"))
