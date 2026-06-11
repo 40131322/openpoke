@@ -1,9 +1,15 @@
 """Simple agent roster management - just a list of agent names."""
 
 import json
-import fcntl
 import time
 from pathlib import Path
+
+try:
+    import fcntl
+    _USE_FCNTL = True
+except ImportError:
+    import msvcrt
+    _USE_FCNTL = False
 
 from ...logging_config import logger
 
@@ -40,16 +46,24 @@ class AgentRoster:
             try:
                 self._roster_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # Open file and acquire exclusive lock
                 with open(self._roster_path, 'w') as f:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    try:
-                        json.dump(self._agents, f, indent=2)
-                        return
-                    finally:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    if _USE_FCNTL:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        try:
+                            json.dump(self._agents, f, indent=2)
+                            return
+                        finally:
+                            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    else:
+                        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                        try:
+                            json.dump(self._agents, f, indent=2)
+                            return
+                        finally:
+                            f.seek(0)
+                            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
-            except BlockingIOError:
+            except (BlockingIOError, OSError):
                 # Lock is held by another process
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
