@@ -4,7 +4,10 @@ from .client import (
     disconnect_account,
     execute_gmail_tool,
     fetch_status,
+    fetch_thread,
+    get_active_gmail_email,
     get_active_gmail_user_id,
+    has_inbound_reply_since,
     initiate_connect,
 )
 from .importance_classifier import classify_email_importance
@@ -15,9 +18,12 @@ from .seen_store import GmailSeenStore
 __all__ = [
     "execute_gmail_tool",
     "fetch_status",
+    "fetch_thread",
     "initiate_connect",
     "disconnect_account",
+    "get_active_gmail_email",
     "get_active_gmail_user_id",
+    "has_inbound_reply_since",
     "classify_email_importance",
     "ImportantEmailWatcher",
     "get_important_email_watcher",

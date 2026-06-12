@@ -13,6 +13,8 @@ class TriggerRecord(BaseModel):
     id: int
     agent_name: str
     payload: str
+    kind: Optional[str] = None
+    thread_id: Optional[str] = None
     start_time: Optional[str] = None
     next_trigger: Optional[str] = None
     recurrence_rule: Optional[str] = None

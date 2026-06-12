@@ -34,7 +34,7 @@ class ExecutionAgentRuntime:
         self.api_key = settings.openrouter_api_key
         self.model = settings.execution_agent_model
         self.tool_registry = get_tool_registry(agent_name=agent_name)
-        self.tool_schemas = get_tool_schemas()
+        self.tool_schemas = get_tool_schemas(agent_name=agent_name)
 
         if not self.api_key:
             raise ValueError("OpenRouter API key not configured. Set OPENROUTER_API_KEY environment variable.")

@@ -34,6 +34,8 @@ class TriggerService:
         *,
         agent_name: str,
         payload: str,
+        kind: Optional[str] = None,
+        thread_id: Optional[str] = None,
         recurrence_rule: Optional[str] = None,
         start_time: Optional[str] = None,
         timezone_name: Optional[str] = None,
@@ -53,6 +55,8 @@ class TriggerService:
         record: Dict[str, Any] = {
             "agent_name": agent_name,
             "payload": payload,
+            "kind": kind or None,
+            "thread_id": thread_id or None,
             "start_time": to_storage_timestamp(start_dt_local),
             "next_trigger": to_storage_timestamp(next_fire) if next_fire else None,
             "recurrence_rule": stored_recurrence,
@@ -239,6 +243,12 @@ class TriggerService:
             },
         )
         return self._store.fetch_one(trigger_id, agent_name)
+
+    def fetch_by_thread(self, *, agent_name: str, thread_id: str) -> List[TriggerRecord]:
+        return self._store.fetch_by_thread(agent_name, thread_id)
+
+    def complete_by_thread(self, *, agent_name: str, thread_id: str) -> int:
+        return self._store.complete_by_thread(agent_name, thread_id)
 
     def clear_all(self) -> None:
         self._store.clear_all()
