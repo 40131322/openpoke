@@ -117,14 +117,6 @@ class TriggerStore:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_record(row) for row in rows]
 
-    def active_agent_ids(self) -> set[str]:
-        """Return ids of agents that have at least one active trigger."""
-        with self._lock, self._connect() as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT agent_name FROM triggers WHERE status='active'"
-            ).fetchall()
-        return {row[0] for row in rows}
-
     def clear_all(self) -> None:
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM triggers")

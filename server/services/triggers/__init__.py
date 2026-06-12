@@ -17,14 +17,8 @@ def get_trigger_service() -> TriggerService:
     return _trigger_service
 
 
-def get_trigger_store() -> TriggerStore:
-    return _trigger_store
-
-
 __all__ = [
     "TriggerRecord",
     "TriggerService",
-    "TriggerStore",
     "get_trigger_service",
-    "get_trigger_store",
 ]
