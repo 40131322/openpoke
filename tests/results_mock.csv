@@ -1,0 +1,5 @@
+branch,sha,dirty,model,strategy,roster_size,topk,trials,target_recency_days,seed,n_trials,accuracy,spawn_rate,wrong_agent_rate,target_recall,avg_prompt_tokens
+original-code,f750023,True,google/gemma-4-31b-it:free,full,5,15,1,2,1234,5,0.8,0.2,0.0,1.0,2752.4
+original-code,f750023,True,google/gemma-4-31b-it:free,full,25,15,1,2,1234,5,0.2,0.2,0.6,1.0,3159.4
+original-code,f750023,True,google/gemma-4-31b-it:free,semantic_topk,5,15,1,2,1234,5,0.6,0.4,0.0,1.0,2752.4
+original-code,f750023,True,google/gemma-4-31b-it:free,semantic_topk,25,15,1,2,1234,5,0.6,0.4,0.0,1.0,2959.2
