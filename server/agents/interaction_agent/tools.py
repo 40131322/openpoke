@@ -2,13 +2,15 @@
 
 import asyncio
 import json
+import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from ...logging_config import logger
 from ...services.conversation import get_conversation_log
-from ...services.execution import get_agent_roster, get_execution_agent_logs
-from ..execution_agent.batch_manager import ExecutionBatchManager
+from ...services.execution import get_execution_agent_logs
+from ...services.execution.registry import get_agent_registry
+from ..execution_agent.batch_manager import get_execution_batch_manager
 
 
 @dataclass
@@ -26,17 +28,64 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "send_message_to_agent",
-            "description": "Deliver instructions to a specific execution agent. Creates a new agent if the name doesn't exist in the roster, or reuses an existing one.",
+            "description": (
+                "Deliver instructions to a specific execution agent. "
+                "Reuses an existing agent when the name (or agent_id) matches one in the roster; "
+                "creates a new agent otherwise. Provide purpose when creating to improve future recall."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "agent_name": {
                         "type": "string",
-                        "description": "Human-readable agent name describing its purpose (e.g., 'Vercel Job Offer', 'Email to Sharanjeet'). This name will be used to identify and potentially reuse the agent."
+                        "description": (
+                            "Human-readable agent name describing its purpose "
+                            "(e.g., 'Vercel Job Offer', 'Email to Sharanjeet'). "
+                            "Used to identify and potentially reuse the agent."
+                        ),
                     },
-                    "instructions": {"type": "string", "description": "Instructions for the agent to execute."},
+                    "instructions": {
+                        "type": "string",
+                        "description": "Instructions for the agent to execute.",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": (
+                            "Stable agent ID returned by find_agent. "
+                            "When provided, reuses that exact agent regardless of name."
+                        ),
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": (
+                            "One-line description of what this agent does. "
+                            "Provide when creating a new agent to improve future recall."
+                        ),
+                    },
                 },
                 "required": ["agent_name", "instructions"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_agent",
+            "description": (
+                "Search for existing execution agents by natural-language query. "
+                "Returns candidates with stable ids, names, purposes, and similarity scores. "
+                "Use this to recall agents outside the active list before reusing them via send_message_to_agent."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What you're looking for (e.g., 'email to Alice', 'Bob project report').",
+                    },
+                },
+                "required": ["query"],
                 "additionalProperties": False,
             },
         },
@@ -105,32 +154,30 @@ TOOL_SCHEMAS = [
     },
 ]
 
-_EXECUTION_BATCH_MANAGER = ExecutionBatchManager()
+def send_message_to_agent(
+    agent_name: str,
+    instructions: str,
+    turn_id: str = "",
+    agent_id: Optional[str] = None,
+    purpose: str = "",
+) -> ToolResult:
+    """Send instructions to an execution agent, reusing one if a match is found.
 
+    Registration into the batch is synchronous (happens before create_task) so
+    every agent dispatched in one LLM iteration is counted before any of them run.
+    """
+    registry = get_agent_registry()
+    registry.load()
+    record, created = registry.resolve_or_create(
+        agent_id=agent_id,
+        display_name=agent_name,
+        purpose=purpose,
+    )
 
-# Create or reuse execution agent and dispatch instructions asynchronously
-def send_message_to_agent(agent_name: str, instructions: str) -> ToolResult:
-    """Send instructions to an execution agent."""
-    roster = get_agent_roster()
-    roster.load()
-    existing_agents = set(roster.get_agents())
-    is_new = agent_name not in existing_agents
+    get_execution_agent_logs().record_request(record.display_name, instructions)
 
-    if is_new:
-        roster.add_agent(agent_name)
-
-    get_execution_agent_logs().record_request(agent_name, instructions)
-
-    action = "Created" if is_new else "Reused"
-    logger.info(f"{action} agent: {agent_name}")
-
-    async def _execute_async() -> None:
-        try:
-            result = await _EXECUTION_BATCH_MANAGER.execute_agent(agent_name, instructions)
-            status = "SUCCESS" if result.success else "FAILED"
-            logger.info(f"Agent '{agent_name}' completed: {status}")
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.error(f"Agent '{agent_name}' failed: {str(exc)}")
+    action = "Created" if created else "Reused"
+    logger.info(f"{action} agent: {record.display_name} (id={record.id})")
 
     try:
         loop = asyncio.get_running_loop()
@@ -138,19 +185,54 @@ def send_message_to_agent(agent_name: str, instructions: str) -> ToolResult:
         logger.error("No running event loop available for async execution")
         return ToolResult(success=False, payload={"error": "No event loop available"})
 
-    loop.create_task(_execute_async())
+    request_id = uuid.uuid4().hex
+
+    # Register synchronously before create_task — pending count is set before any task runs.
+    mgr = get_execution_batch_manager()
+    mgr.register(turn_id, record.display_name, instructions, request_id)
+
+    async def _run_task() -> None:
+        try:
+            result = await mgr._run_agent(record.display_name, instructions, request_id)
+            await mgr._complete_execution(turn_id, result)
+            status = "SUCCESS" if result.success else "FAILED"
+            logger.info(f"Agent '{record.display_name}' completed: {status}")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(f"Agent '{record.display_name}' task failed: {str(exc)}")
+
+    loop.create_task(_run_task())
 
     return ToolResult(
         success=True,
         payload={
             "status": "submitted",
-            "agent_name": agent_name,
-            "new_agent_created": is_new,
+            "agent_id": record.id,
+            "agent_name": record.display_name,
+            "new_agent_created": created,
         },
     )
 
 
-# Send immediate message to user and record in conversation history
+def find_agent(query: str) -> ToolResult:
+    """Search active agents by query; return top candidates with id, name, purpose, score."""
+    registry = get_agent_registry()
+    registry.load()
+    candidates = registry.find_candidates(query, limit=5)
+    results = [
+        {
+            "id": r.id,
+            "name": r.display_name,
+            "purpose": r.purpose,
+            "score": round(s, 3),
+        }
+        for r, s in candidates
+    ]
+    return ToolResult(
+        success=True,
+        payload={"candidates": results, "count": len(results)},
+    )
+
+
 def send_message_to_user(message: str) -> ToolResult:
     """Record a user-visible reply in the conversation log."""
     log = get_conversation_log()
@@ -164,7 +246,6 @@ def send_message_to_user(message: str) -> ToolResult:
     )
 
 
-# Format and record email draft for user review
 def send_draft(
     to: str,
     subject: str,
@@ -189,14 +270,10 @@ def send_draft(
     )
 
 
-# Record silent wait state to avoid duplicate responses
 def wait(reason: str) -> ToolResult:
     """Wait silently and add a wait log entry that is not visible to the user."""
     log = get_conversation_log()
-    
-    # Record a dedicated wait entry so the UI knows to ignore it
     log.record_wait(reason)
-    
 
     return ToolResult(
         success=True,
@@ -208,14 +285,12 @@ def wait(reason: str) -> ToolResult:
     )
 
 
-# Return predefined tool schemas for LLM function calling
 def get_tool_schemas():
     """Return OpenAI-compatible tool schemas."""
     return TOOL_SCHEMAS
 
 
-# Route tool calls to appropriate handlers with argument validation and error handling
-def handle_tool_call(name: str, arguments: Any) -> ToolResult:
+def handle_tool_call(name: str, arguments: Any, turn_id: str = "") -> ToolResult:
     """Handle tool calls from interaction agent."""
     try:
         if isinstance(arguments, str):
@@ -226,7 +301,15 @@ def handle_tool_call(name: str, arguments: Any) -> ToolResult:
             return ToolResult(success=False, payload={"error": "Invalid arguments format"})
 
         if name == "send_message_to_agent":
-            return send_message_to_agent(**args)
+            return send_message_to_agent(
+                agent_name=args.get("agent_name", ""),
+                instructions=args.get("instructions", ""),
+                turn_id=turn_id,
+                agent_id=args.get("agent_id"),
+                purpose=args.get("purpose", ""),
+            )
+        if name == "find_agent":
+            return find_agent(**args)
         if name == "send_message_to_user":
             return send_message_to_user(**args)
         if name == "send_draft":
