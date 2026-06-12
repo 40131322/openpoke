@@ -15,24 +15,52 @@ from ...models import GmailConnectPayload, GmailDisconnectPayload, GmailStatusPa
 from ...utils import error_response
 
 
+_DATA_FILE = (
+    __import__("pathlib").Path(__file__).resolve().parent.parent.parent.parent
+    / "data" / "gmail" / "user.json"
+)
+
 _CLIENT_LOCK = threading.Lock()
 _CLIENT: Optional[Any] = None
 
 _PROFILE_CACHE: Dict[str, Dict[str, Any]] = {}
 _PROFILE_CACHE_LOCK = threading.Lock()
 _ACTIVE_USER_ID_LOCK = threading.Lock()
-_ACTIVE_USER_ID: Optional[str] = None
 
 
 def _normalized(value: Optional[str]) -> str:
     return (value or "").strip()
 
 
+def _load_user_id() -> Optional[str]:
+    try:
+        if _DATA_FILE.exists():
+            return json.loads(_DATA_FILE.read_text(encoding="utf-8")).get("user_id") or None
+    except Exception:
+        pass
+    return None
+
+
+def _save_user_id(user_id: Optional[str]) -> None:
+    try:
+        _DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _DATA_FILE.write_text(json.dumps({"user_id": user_id or ""}), encoding="utf-8")
+    except Exception as exc:
+        logger.warning(f"Failed to persist gmail user_id: {exc}")
+
+
+# Initialise from disk so the user_id survives server restarts.
+_ACTIVE_USER_ID: Optional[str] = _load_user_id()
+
+
 def _set_active_gmail_user_id(user_id: Optional[str]) -> None:
     sanitized = _normalized(user_id)
+    value = sanitized or None
     with _ACTIVE_USER_ID_LOCK:
         global _ACTIVE_USER_ID
-        _ACTIVE_USER_ID = sanitized or None
+        _ACTIVE_USER_ID = value
+    if value:
+        _save_user_id(value)
 
 
 def get_active_gmail_user_id() -> Optional[str]:
@@ -70,6 +98,18 @@ def _get_composio_client(settings: Optional[Settings] = None):
 def _extract_email(obj: Any) -> Optional[str]:
     if obj is None:
         return None
+
+    # Composio stores the account email in account.deprecated.labels (List[str])
+    try:
+        deprecated = getattr(obj, "deprecated", None)
+        if deprecated is not None:
+            labels = getattr(deprecated, "labels", None) or []
+            for label in labels:
+                if isinstance(label, str) and "@" in label:
+                    return label
+    except Exception:
+        pass
+
     direct_keys = (
         "email",
         "email_address",

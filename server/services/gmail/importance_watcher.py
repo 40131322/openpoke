@@ -11,6 +11,7 @@ from .client import execute_gmail_tool, get_active_gmail_user_id
 from .processing import EmailTextCleaner, ProcessedEmail, parse_gmail_fetch_response
 from .seen_store import GmailSeenStore
 from .importance_classifier import classify_email_importance
+from ..scheduling.detector import SchedulingContext, detect_scheduling_intent
 from ...logging_config import logger
 from ...utils.timezones import convert_to_user_timezone
 
@@ -204,7 +205,7 @@ class ImportantEmailWatcher:
                 continue
 
             summaries_sent += 1
-            await self._dispatch_summary(summary)
+            await self._dispatch_email(email, summary)
 
         if processed_ids:
             self._seen_store.mark_seen(processed_ids)
@@ -219,11 +220,41 @@ class ImportantEmailWatcher:
         )
         self._complete_poll(user_now)
 
-    async def _dispatch_summary(self, summary: str) -> None:
+    async def _dispatch_email(self, email: ProcessedEmail, summary: str) -> None:
+        """Dispatch an important email to the interaction agent, enriched with scheduling context if detected."""
+        sched: SchedulingContext | None = None
+        try:
+            sched = await detect_scheduling_intent(email.clean_text, email.subject)
+        except Exception as exc:
+            logger.warning("Scheduling detection error (ignored)", extra={"error": str(exc)})
+
+        message = f"Important email watcher notification:\n{summary}"
+
+        if sched is not None:
+            if sched.proposed_times:
+                times_block = "\n".join(f"  - {t}" for t in sched.proposed_times)
+            else:
+                times_block = "  (none — sender is asking for your availability)"
+            action = (
+                "confirm or decline one of the proposed times"
+                if sched.is_proposing
+                else "propose times that work for you"
+            )
+            message += (
+                f"\n\n<scheduling_context>"
+                f"\nSender: {email.sender}"
+                f"\nThread ID: {email.thread_id or 'none'}"
+                f"\nMessage ID: {email.id}"
+                f"\nSubject: {email.subject}"
+                f"\nMeeting topic: {sched.meeting_topic or 'not specified'}"
+                f"\nProposed times:\n{times_block}"
+                f"\nRequired action: Check your calendar availability and {action}."
+                f"\n</scheduling_context>"
+            )
+
         runtime = _resolve_interaction_runtime()
         try:
-            contextualized = f"Important email watcher notification:\n{summary}"
-            await runtime.handle_agent_message(contextualized)
+            await runtime.handle_agent_message(message)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
                 "Failed to dispatch important email summary",

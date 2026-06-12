@@ -51,15 +51,16 @@ class Settings(BaseModel):
     server_port: int = Field(default=_env_int("OPENPOKE_PORT", 8001))
 
     # LLM model selection (each overridable via the matching env var)
-    interaction_agent_model: str = Field(default=os.getenv("INTERACTION_AGENT_MODEL", "google/gemma-4-31b-it:free"))
-    execution_agent_model: str = Field(default=os.getenv("EXECUTION_AGENT_MODEL", "google/gemma-4-31b-it:free"))
-    execution_agent_search_model: str = Field(default=os.getenv("EXECUTION_AGENT_SEARCH_MODEL", "google/gemma-4-31b-it:free"))
-    summarizer_model: str = Field(default=os.getenv("SUMMARIZER_MODEL", "google/gemma-4-31b-it:free"))
-    email_classifier_model: str = Field(default=os.getenv("EMAIL_CLASSIFIER_MODEL", "google/gemma-4-31b-it:free"))
+    interaction_agent_model: str = Field(default=os.getenv("INTERACTION_AGENT_MODEL", "google/gemini-3.5-flash"))
+    execution_agent_model: str = Field(default=os.getenv("EXECUTION_AGENT_MODEL", "google/gemini-3.5-flash"))
+    execution_agent_search_model: str = Field(default=os.getenv("EXECUTION_AGENT_SEARCH_MODEL", "google/gemini-3.5-flash"))
+    summarizer_model: str = Field(default=os.getenv("SUMMARIZER_MODEL", "google/gemini-3.5-flash"))
+    email_classifier_model: str = Field(default=os.getenv("EMAIL_CLASSIFIER_MODEL", "google/gemini-3.5-flash"))
 
     # Credentials / integrations
     openrouter_api_key: Optional[str] = Field(default=os.getenv("OPENROUTER_API_KEY"))
     composio_gmail_auth_config_id: Optional[str] = Field(default=os.getenv("COMPOSIO_GMAIL_AUTH_CONFIG_ID"))
+    composio_calendar_auth_config_id: Optional[str] = Field(default=os.getenv("COMPOSIO_CALENDAR_AUTH_CONFIG_ID"))
     composio_api_key: Optional[str] = Field(default=os.getenv("COMPOSIO_API_KEY"))
 
     # HTTP behaviour

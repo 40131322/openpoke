@@ -41,6 +41,7 @@ import argparse
 import asyncio
 import csv
 import datetime
+import hashlib
 import json
 import math
 import os
@@ -118,6 +119,11 @@ class Agent:
     name: str
     description: str
     last_used_days_ago: int = 0  # 0 = used today; larger = more dormant
+    id: str = ""
+
+    def __post_init__(self):
+        if not self.id:
+            self.id = hashlib.md5(self.name.encode()).hexdigest()[:12]
 
 
 @dataclass
@@ -286,8 +292,8 @@ RETRIEVERS: Dict[str, Callable[[List[Agent], str, int], List[Agent]]] = {
 # ---------------------------------------------------------------------------
 def render_roster(agents: List[Agent]) -> str:
     return "\n".join(
-        f'<agent name="{escape(a.name, quote=True)}" '
-        f'description="{escape(a.description, quote=True)}" />'
+        f'<agent id="{a.id}" name="{escape(a.name, quote=True)}">'
+        f'{escape(a.description)}</agent>'
         for a in agents
     )
 
@@ -308,16 +314,63 @@ _TOOL_SCHEMAS = [
         "function": {
             "name": "send_message_to_agent",
             "description": (
-                "Deliver instructions to a specific execution agent. Creates a new "
-                "agent if the name doesn't exist, or reuses an existing one."
+                "Deliver instructions to a specific execution agent. "
+                "Reuses an existing agent when the name (or agent_id) matches one in the roster; "
+                "creates a new agent otherwise. Provide purpose when creating to improve future recall."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent_name": {"type": "string"},
-                    "instructions": {"type": "string"},
+                    "agent_name": {
+                        "type": "string",
+                        "description": (
+                            "Human-readable agent name describing its purpose "
+                            "(e.g., 'Vercel Job Offer', 'Email to Sharanjeet'). "
+                            "Used to identify and potentially reuse the agent."
+                        ),
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "Instructions for the agent to execute.",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": (
+                            "Stable agent ID returned by find_agent. "
+                            "When provided, reuses that exact agent regardless of name."
+                        ),
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": (
+                            "One-line description of what this agent does. "
+                            "Provide when creating a new agent to improve future recall."
+                        ),
+                    },
                 },
                 "required": ["agent_name", "instructions"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_agent",
+            "description": (
+                "Search for existing execution agents by natural-language query. "
+                "Returns candidates with stable ids, names, purposes, and similarity scores. "
+                "Use this to recall agents outside the active list before reusing them via send_message_to_agent."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What you're looking for (e.g., 'email to Alice', 'Bob project report').",
+                    },
+                },
+                "required": ["query"],
                 "additionalProperties": False,
             },
         },
@@ -336,6 +389,8 @@ _TOOL_SCHEMAS = [
         },
     },
 ]
+
+_FIND_AGENT_SENTINEL = "__find_agent__"
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +447,7 @@ def _mock_completion_factory():
 
     async def _mock(*, model, messages, system, api_key, tools) -> Dict:
         content = messages[-1]["content"]
-        shown = re.findall(r'<agent name="([^"]+)"', content)
+        shown = re.findall(r'<agent[^>]+name="([^"]+)"', content)
         request = re.search(r"<new_user_message>\n(.*?)\n</new_user_message>", content, re.S)
         request = request.group(1) if request else ""
         # Which target is expected for this request?
@@ -441,27 +496,41 @@ class TrialResult:
     shown_size: int
     target_shown: bool
     prompt_tokens: int
-    outcome: str  # reuse | spawn | wrong_agent | no_tool_call
+    outcome: str  # reuse | spawn | wrong_agent | searched | no_tool_call
 
 
 def _extract_agent_name(response: Dict) -> Optional[str]:
+    """Return the agent_name from the first send_message_to_agent call, the
+    sentinel if only find_agent was called, or None for no routing tool call."""
     choice = (response.get("choices") or [{}])[0]
     message = choice.get("message", {})
-    for tc in message.get("tool_calls") or []:
+    tool_calls = message.get("tool_calls") or []
+    agent_name = None
+    found_search = False
+    for tc in tool_calls:
         fn = tc.get("function", {})
-        if fn.get("name") == "send_message_to_agent":
+        if fn.get("name") == "find_agent":
+            found_search = True
+        elif fn.get("name") == "send_message_to_agent":
             raw = fn.get("arguments", "{}")
             try:
                 args = json.loads(raw) if isinstance(raw, str) else raw
-                return args.get("agent_name")
+                if agent_name is None:  # first call wins
+                    agent_name = args.get("agent_name")
             except (json.JSONDecodeError, AttributeError):
-                return None
+                pass
+    if agent_name is not None:
+        return agent_name
+    if found_search:
+        return _FIND_AGENT_SENTINEL
     return None
 
 
 def _classify(emitted: Optional[str], expected: str, shown_names: List[str]) -> str:
     if emitted is None:
         return "no_tool_call"
+    if emitted == _FIND_AGENT_SENTINEL:
+        return "searched"  # model called find_agent without routing in one turn
     if emitted == expected:
         return "reuse"
     if emitted in shown_names:
@@ -504,6 +573,7 @@ class Metrics:
     accuracy: float          # reuse rate (the thing you want high)
     spawn_rate: float        # duplicate spawns (the thing you want low)
     wrong_agent_rate: float
+    search_rate: float       # model called find_agent before routing (signals roster confusion)
     target_recall: float     # did the strategy keep the right agent in context
     avg_prompt_tokens: float
 
@@ -515,6 +585,7 @@ def summarise(results: List[TrialResult]) -> Metrics:
         accuracy=sum(r.outcome == "reuse" for r in results) / n,
         spawn_rate=sum(r.outcome == "spawn" for r in results) / n,
         wrong_agent_rate=sum(r.outcome == "wrong_agent" for r in results) / n,
+        search_rate=sum(r.outcome == "searched" for r in results) / n,
         target_recall=sum(r.target_shown for r in results) / n,
         avg_prompt_tokens=sum(r.prompt_tokens for r in results) / n,
     )
@@ -546,25 +617,27 @@ async def run_strategy(
 
 def _fmt_table(strategy: str, by_size: Dict[int, Metrics]) -> str:
     lines = [f"\n=== strategy: {strategy} (model: {_MODEL}) ==="]
-    lines.append(f"{'N':>6}  {'accuracy':>9}  {'spawn':>7}  {'wrong':>7}  {'recall':>7}  {'tokens':>8}")
+    lines.append(f"{'N':>6}  {'accuracy':>9}  {'spawn':>7}  {'wrong':>7}  {'search':>7}  {'recall':>7}  {'tokens':>8}")
     for size, m in sorted(by_size.items()):
         lines.append(
             f"{size:>6}  {m.accuracy:>8.0%}  {m.spawn_rate:>6.0%}  "
-            f"{m.wrong_agent_rate:>6.0%}  {m.target_recall:>6.0%}  {m.avg_prompt_tokens:>8.0f}"
+            f"{m.wrong_agent_rate:>6.0%}  {m.search_rate:>6.0%}  "
+            f"{m.target_recall:>6.0%}  {m.avg_prompt_tokens:>8.0f}"
         )
     return "\n".join(lines)
 
 
 def _fmt_delta(base: str, mit: str, b: Dict[int, Metrics], m: Dict[int, Metrics]) -> str:
     lines = [f"\n=== delta: {mit} vs {base} (positive accuracy / negative spawn = win) ==="]
-    lines.append(f"{'N':>6}  {'d_accuracy':>10}  {'d_spawn':>8}  {'d_tokens':>9}")
+    lines.append(f"{'N':>6}  {'d_accuracy':>10}  {'d_spawn':>8}  {'d_search':>9}  {'d_tokens':>9}")
     for size in sorted(b):
         if size not in m:
             continue
         da = m[size].accuracy - b[size].accuracy
         ds = m[size].spawn_rate - b[size].spawn_rate
+        dse = m[size].search_rate - b[size].search_rate
         dt = m[size].avg_prompt_tokens - b[size].avg_prompt_tokens
-        lines.append(f"{size:>6}  {da:>+9.0%}  {ds:>+7.0%}  {dt:>+9.0f}")
+        lines.append(f"{size:>6}  {da:>+9.0%}  {ds:>+7.0%}  {dse:>+8.0%}  {dt:>+9.0f}")
     return "\n".join(lines)
 
 
@@ -627,6 +700,7 @@ def _write_csv(path: str, args, all_results: Dict[str, Dict[int, Metrics]]) -> N
                 "accuracy": round(m.accuracy, 4),
                 "spawn_rate": round(m.spawn_rate, 4),
                 "wrong_agent_rate": round(m.wrong_agent_rate, 4),
+                "search_rate": round(m.search_rate, 4),
                 "target_recall": round(m.target_recall, 4),
                 "avg_prompt_tokens": round(m.avg_prompt_tokens, 1),
             })
