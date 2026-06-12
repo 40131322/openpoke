@@ -390,34 +390,47 @@ def get_calendar_access_token() -> Optional[str]:
 
     try:
         client = _get_composio_client()
-        items = client.connected_accounts.list(
-            user_ids=[user_id], toolkit_slugs=[_TOOLKIT_SLUG], statuses=["ACTIVE"]
-        )
-        data = getattr(items, "data", None)
-        if data is None and isinstance(items, dict):
-            data = items.get("data")
-        if not data:
-            return None
+        # The SDK-level client.connected_accounts.list() silently returns empty
+        # in this SDK version; use the underlying HTTP client instead.
+        raw_list = client.client.connected_accounts.list()
 
-        account = data[0]
-        state = getattr(account, "state", None)
-        val = getattr(state, "val", None) if state is not None else None
-        token: Optional[str] = getattr(val, "access_token", None) if val is not None else None
+        settings = get_settings()
+        calendar_auth_config_id = settings.composio_calendar_auth_config_id or ""
+
+        token: Optional[str] = None
+        expiry_seconds = 3600.0
+
+        for item in raw_list.items:
+            if getattr(item, "user_id", None) != user_id:
+                continue
+            item_auth_cfg = getattr(item.auth_config, "id", None) if item.auth_config else None
+            if calendar_auth_config_id and item_auth_cfg != calendar_auth_config_id:
+                continue
+            state = getattr(item, "state", None)
+            val = getattr(state, "val", None) if state is not None else None
+            if val is None:
+                continue
+            if (getattr(val, "status", None) or "").upper() != "ACTIVE":
+                continue
+            tok = getattr(val, "access_token", None)
+            if tok:
+                token = tok
+                try:
+                    expiry_seconds = float(getattr(val, "expires_in", None) or 3600)
+                except (TypeError, ValueError):
+                    expiry_seconds = 3600.0
+                break
+
         if not token:
+            logger.warning("No active calendar token found for user_id=%r", user_id)
             return None
-
-        try:
-            raw_expiry = getattr(val, "expires_in", None)
-            expiry_seconds = float(raw_expiry) if raw_expiry else 3600.0
-        except (TypeError, ValueError):
-            expiry_seconds = 3600.0
 
         with _TOKEN_CACHE_LOCK:
             _TOKEN_CACHE[user_id] = (token, now + expiry_seconds)
 
         return token
     except Exception as exc:
-        logger.warning("Failed to get calendar access token", extra={"error": str(exc)})
+        logger.exception("Failed to get calendar access token")
         return None
 
 

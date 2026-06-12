@@ -231,9 +231,6 @@ class ExecutionAgentRuntime:
             result = tool_func(**arguments)
             if inspect.isawaitable(result):
                 result = await result
-            # Treat {"error": ...} returns as failures so the LLM sees status="error"
-            if isinstance(result, dict) and "error" in result:
-                return False, result
             return True, result
         except Exception as e:
             return False, {"error": str(e)}
