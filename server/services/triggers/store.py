@@ -62,9 +62,9 @@ class TriggerStore:
         with self._lock, self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute(schema_sql)
+            self._migrate(conn)
             conn.execute(index_sql)
             conn.execute(thread_index_sql)
-            self._migrate(conn)
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         existing = {row[1] for row in conn.execute("PRAGMA table_info(triggers)").fetchall()}
