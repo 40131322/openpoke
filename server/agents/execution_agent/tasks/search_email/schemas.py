@@ -16,7 +16,7 @@ _SCHEMAS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": TASK_TOOL_NAME,
-            "description": "Expand a raw Gmail search request into multiple targeted queries and return relevant emails.",
+            "description": "Search Gmail emails for email-specific queries (receipts, correspondence, attachments). Do NOT use this for calendar or scheduling queries — use calendar_list_events and related calendar tools instead.",
             "parameters": {
                 "type": "object",
                 "properties": {

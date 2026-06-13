@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import status
 from fastapi.responses import JSONResponse
@@ -15,57 +16,39 @@ from ...models import GmailConnectPayload, GmailDisconnectPayload, GmailStatusPa
 from ...utils import error_response
 
 
-_DATA_FILE = (
-    __import__("pathlib").Path(__file__).resolve().parent.parent.parent.parent
-    / "data" / "gmail" / "user.json"
-)
-
 _CLIENT_LOCK = threading.Lock()
 _CLIENT: Optional[Any] = None
 
 _PROFILE_CACHE: Dict[str, Dict[str, Any]] = {}
 _PROFILE_CACHE_LOCK = threading.Lock()
 _ACTIVE_USER_ID_LOCK = threading.Lock()
+_ACTIVE_USER_ID: Optional[str] = None
 
 
 def _normalized(value: Optional[str]) -> str:
     return (value or "").strip()
 
 
-def _load_user_id() -> Optional[str]:
-    try:
-        if _DATA_FILE.exists():
-            return json.loads(_DATA_FILE.read_text(encoding="utf-8")).get("user_id") or None
-    except Exception:
-        pass
-    return None
-
-
-def _save_user_id(user_id: Optional[str]) -> None:
-    try:
-        _DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _DATA_FILE.write_text(json.dumps({"user_id": user_id or ""}), encoding="utf-8")
-    except Exception as exc:
-        logger.warning(f"Failed to persist gmail user_id: {exc}")
-
-
-# Initialise from disk so the user_id survives server restarts.
-_ACTIVE_USER_ID: Optional[str] = _load_user_id()
-
-
 def _set_active_gmail_user_id(user_id: Optional[str]) -> None:
     sanitized = _normalized(user_id)
-    value = sanitized or None
     with _ACTIVE_USER_ID_LOCK:
         global _ACTIVE_USER_ID
-        _ACTIVE_USER_ID = value
-    if value:
-        _save_user_id(value)
+        _ACTIVE_USER_ID = sanitized or None
 
 
 def get_active_gmail_user_id() -> Optional[str]:
     with _ACTIVE_USER_ID_LOCK:
         return _ACTIVE_USER_ID
+
+
+def get_active_gmail_email() -> Optional[str]:
+    user_id = get_active_gmail_user_id()
+    if not user_id:
+        return None
+    profile = _get_cached_profile(user_id)
+    if profile:
+        return _extract_email(profile)
+    return None
 
 
 def _gmail_import_client():
@@ -98,18 +81,6 @@ def _get_composio_client(settings: Optional[Settings] = None):
 def _extract_email(obj: Any) -> Optional[str]:
     if obj is None:
         return None
-
-    # Composio stores the account email in account.deprecated.labels (List[str])
-    try:
-        deprecated = getattr(obj, "deprecated", None)
-        if deprecated is not None:
-            labels = getattr(deprecated, "labels", None) or []
-            for label in labels:
-                if isinstance(label, str) and "@" in label:
-                    return label
-    except Exception:
-        pass
-
     direct_keys = (
         "email",
         "email_address",
@@ -532,3 +503,42 @@ def execute_gmail_tool(
             extra={"tool": tool_name, "user_id": composio_user_id},
         )
         raise RuntimeError(f"{tool_name} invocation failed: {exc}") from exc
+
+
+def _sender_address(sender: str) -> str:
+    """Return the bare email address from 'Name <addr>' or a plain address."""
+    match = re.search(r"<([^>]+)>", sender)
+    return (match.group(1) if match else sender).lower().strip()
+
+
+def fetch_thread(thread_id: str) -> "List[Any]":
+    """Return all messages in a Gmail thread as ProcessedEmail objects."""
+    from .processing import parse_gmail_fetch_response
+
+    user_id = get_active_gmail_user_id()
+    if not user_id:
+        return []
+    try:
+        result = execute_gmail_tool(
+            "GMAIL_FETCH_MESSAGE_BY_THREAD_ID",
+            user_id,
+            arguments={"thread_id": thread_id},
+        )
+        emails, _ = parse_gmail_fetch_response(result, query=f"thread:{thread_id}")
+        return emails
+    except Exception as exc:
+        logger.warning(
+            "fetch_thread failed",
+            extra={"thread_id": thread_id, "error": str(exc)},
+        )
+        return []
+
+
+def has_inbound_reply_since(thread_id: str, sent_at: datetime, self_email: str) -> bool:
+    """Return True if someone other than self_email replied after sent_at."""
+    messages = fetch_thread(thread_id)
+    self_addr = self_email.lower().strip()
+    return any(
+        m.timestamp > sent_at and _sender_address(m.sender) != self_addr
+        for m in messages
+    )

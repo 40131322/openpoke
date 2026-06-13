@@ -23,6 +23,14 @@ _SCHEMAS: List[Dict[str, Any]] = [
                         "type": "string",
                         "description": "Raw instruction text that should run when the trigger fires.",
                     },
+                    "kind": {
+                        "type": "string",
+                        "description": "Machine-readable trigger type, e.g. 'checkback'. Used to find and cancel related triggers.",
+                    },
+                    "thread_id": {
+                        "type": "string",
+                        "description": "Gmail thread ID this trigger is associated with. Enables dedup and cancellation by thread.",
+                    },
                     "recurrence_rule": {
                         "type": "string",
                         "description": "iCalendar RRULE string describing how often to fire (optional).",
@@ -106,6 +114,8 @@ def _trigger_record_to_payload(record: TriggerRecord) -> Dict[str, Any]:
     return {
         "id": record.id,
         "payload": record.payload,
+        "kind": record.kind,
+        "thread_id": record.thread_id,
         "start_time": record.start_time,
         "next_trigger": record.next_trigger,
         "recurrence_rule": record.recurrence_rule,
@@ -122,12 +132,16 @@ def _create_trigger_tool(
     *,
     agent_name: str,
     payload: str,
+    kind: Optional[str] = None,
+    thread_id: Optional[str] = None,
     recurrence_rule: Optional[str] = None,
     start_time: Optional[str] = None,
     status: Optional[str] = None,
 ) -> Dict[str, Any]:
     timezone_value = get_timezone_store().get_timezone()
     summary_args = {
+        "kind": kind,
+        "thread_id": thread_id,
         "recurrence_rule": recurrence_rule,
         "start_time": start_time,
         "timezone": timezone_value,
@@ -137,6 +151,8 @@ def _create_trigger_tool(
         record = _TRIGGER_SERVICE.create_trigger(
             agent_name=agent_name,
             payload=payload,
+            kind=kind,
+            thread_id=thread_id,
             recurrence_rule=recurrence_rule,
             start_time=start_time,
             timezone_name=timezone_value,
@@ -155,6 +171,8 @@ def _create_trigger_tool(
     )
     return {
         "trigger_id": record.id,
+        "kind": record.kind,
+        "thread_id": record.thread_id,
         "status": record.status,
         "next_trigger": record.next_trigger,
         "start_time": record.start_time,

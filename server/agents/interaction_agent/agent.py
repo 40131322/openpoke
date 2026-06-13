@@ -4,7 +4,7 @@ from html import escape
 from pathlib import Path
 from typing import Dict, List
 
-from ...services.execution.registry import HOT_N, get_agent_registry
+from ...services.execution import get_agent_roster
 
 _prompt_path = Path(__file__).parent / "system_prompt.md"
 SYSTEM_PROMPT = _prompt_path.read_text(encoding="utf-8").strip()
@@ -43,18 +43,19 @@ def _render_conversation_history(transcript: str) -> str:
 
 # Format currently active execution agents into XML tags for LLM awareness
 def _render_active_agents() -> str:
-    registry = get_agent_registry()
-    registry.load()
-    recs = sorted(registry.active(), key=lambda r: r.last_active, reverse=True)[:HOT_N]
+    roster = get_agent_roster()
+    roster.load()
+    agents = roster.get_agents()
 
-    if not recs:
+    if not agents:
         return "None"
 
-    return "\n".join(
-        f'<agent id="{r.id}" name="{escape(r.display_name, quote=True)}">'
-        f'{escape(r.purpose)}</agent>'
-        for r in recs
-    )
+    rendered: List[str] = []
+    for agent_name in agents:
+        name = escape(agent_name or "agent", quote=True)
+        rendered.append(f'<agent name="{name}" />')
+
+    return "\n".join(rendered)
 
 
 # Wrap the current message in appropriate XML tags based on sender type

@@ -133,6 +133,10 @@ class TriggerScheduler:
     def _format_instructions(self, trigger: TriggerRecord, fired_at: datetime) -> str:
         scheduled_for = trigger.next_trigger or _isoformat(fired_at)
         metadata_lines = [f"Trigger ID: {trigger.id}"]
+        if trigger.kind:
+            metadata_lines.append(f"Kind: {trigger.kind}")
+        if trigger.thread_id:
+            metadata_lines.append(f"Thread ID: {trigger.thread_id}")
         if trigger.recurrence_rule:
             metadata_lines.append(f"Recurrence: {trigger.recurrence_rule}")
         if trigger.timezone:

@@ -39,6 +39,8 @@ class TriggerStore:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             agent_name TEXT NOT NULL,
             payload TEXT NOT NULL,
+            kind TEXT,
+            thread_id TEXT,
             start_time TEXT,
             next_trigger TEXT,
             recurrence_rule TEXT,
@@ -53,10 +55,23 @@ class TriggerStore:
         CREATE INDEX IF NOT EXISTS idx_triggers_agent_next
         ON triggers (agent_name, next_trigger);
         """
+        thread_index_sql = """
+        CREATE INDEX IF NOT EXISTS idx_triggers_agent_thread
+        ON triggers (agent_name, thread_id, status);
+        """
         with self._lock, self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute(schema_sql)
+            self._migrate(conn)
             conn.execute(index_sql)
+            conn.execute(thread_index_sql)
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(triggers)").fetchall()}
+        if "kind" not in existing:
+            conn.execute("ALTER TABLE triggers ADD COLUMN kind TEXT")
+        if "thread_id" not in existing:
+            conn.execute("ALTER TABLE triggers ADD COLUMN thread_id TEXT")
 
     def insert(self, payload: Dict[str, Any]) -> int:
         with self._lock, self._connect() as conn:
@@ -117,13 +132,23 @@ class TriggerStore:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_record(row) for row in rows]
 
-    def active_agent_ids(self) -> set[str]:
-        """Return ids of agents that have at least one active trigger."""
+    def fetch_by_thread(self, agent_name: str, thread_id: str) -> List[TriggerRecord]:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
-                "SELECT DISTINCT agent_name FROM triggers WHERE status='active'"
+                "SELECT * FROM triggers WHERE agent_name = ? AND thread_id = ? AND status = 'active'",
+                (agent_name, thread_id),
             ).fetchall()
-        return {row[0] for row in rows}
+        return [self._row_to_record(row) for row in rows]
+
+    def complete_by_thread(self, agent_name: str, thread_id: str) -> int:
+        now = to_storage_timestamp(utc_now())
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE triggers SET status = 'completed', next_trigger = NULL, last_error = NULL,"
+                " updated_at = ? WHERE agent_name = ? AND thread_id = ? AND status = 'active'",
+                (now, agent_name, thread_id),
+            )
+            return cursor.rowcount
 
     def clear_all(self) -> None:
         with self._lock, self._connect() as conn:

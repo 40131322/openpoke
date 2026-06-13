@@ -1,13 +1,11 @@
 """Interaction Agent Runtime - handles LLM calls for user and agent turns."""
 
 import json
-import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from .agent import build_system_prompt, prepare_message_with_history
 from .tools import ToolResult, get_tool_schemas, handle_tool_call
-from ..execution_agent.batch_manager import get_execution_batch_manager
 from ...config import get_settings
 from ...services.conversation import get_conversation_log, get_working_memory_log
 from ...openrouter_client import request_chat_completion
@@ -67,10 +65,6 @@ class InteractionAgentRuntime:
     async def execute(self, user_message: str) -> InteractionResult:
         """Handle a user-authored message."""
 
-        turn_id = uuid.uuid4().hex
-        mgr = get_execution_batch_manager()
-        mgr.begin_turn(turn_id)
-
         try:
             transcript_before = self._load_conversation_transcript()
             self.conversation_log.record_user_message(user_message)
@@ -81,7 +75,7 @@ class InteractionAgentRuntime:
             )
 
             logger.info("Processing user message through interaction agent")
-            summary = await self._run_interaction_loop(system_prompt, messages, turn_id)
+            summary = await self._run_interaction_loop(system_prompt, messages)
 
             final_response = self._finalize_response(summary)
 
@@ -101,16 +95,10 @@ class InteractionAgentRuntime:
                 response="",
                 error=str(exc),
             )
-        finally:
-            await mgr.seal_turn(turn_id)
 
     # Handle incoming messages from execution agents and generate appropriate responses
     async def handle_agent_message(self, agent_message: str) -> InteractionResult:
         """Process a status update emitted by an execution agent."""
-
-        turn_id = uuid.uuid4().hex
-        mgr = get_execution_batch_manager()
-        mgr.begin_turn(turn_id)
 
         try:
             transcript_before = self._load_conversation_transcript()
@@ -122,7 +110,7 @@ class InteractionAgentRuntime:
             )
 
             logger.info("Processing execution agent results")
-            summary = await self._run_interaction_loop(system_prompt, messages, turn_id)
+            summary = await self._run_interaction_loop(system_prompt, messages)
 
             final_response = self._finalize_response(summary)
 
@@ -142,15 +130,12 @@ class InteractionAgentRuntime:
                 response="",
                 error=str(exc),
             )
-        finally:
-            await mgr.seal_turn(turn_id)
 
     # Core interaction loop that handles LLM calls and tool executions until completion
     async def _run_interaction_loop(
         self,
         system_prompt: str,
         messages: List[Dict[str, Any]],
-        turn_id: str,
     ) -> _LoopSummary:
         """Iteratively query the LLM until it issues a final response."""
 
@@ -186,7 +171,7 @@ class InteractionAgentRuntime:
                     if isinstance(agent_name, str) and agent_name:
                         summary.execution_agents.add(agent_name)
 
-                result = self._execute_tool(tool_call, turn_id)
+                result = self._execute_tool(tool_call)
 
                 if result.user_message:
                     summary.user_messages.append(result.user_message)
@@ -299,7 +284,7 @@ class InteractionAgentRuntime:
         return {}, f"unsupported argument type: {type(raw_arguments).__name__}"
 
     # Execute tool calls with error handling and logging, returning standardized results
-    def _execute_tool(self, tool_call: _ToolCall, turn_id: str) -> ToolResult:
+    def _execute_tool(self, tool_call: _ToolCall) -> ToolResult:
         """Execute a tool call and convert low-level errors into structured results."""
 
         if "__invalid_arguments__" in tool_call.arguments:
@@ -309,7 +294,7 @@ class InteractionAgentRuntime:
 
         try:
             self._log_tool_invocation(tool_call, stage="start")
-            result = handle_tool_call(tool_call.name, tool_call.arguments, turn_id)
+            result = handle_tool_call(tool_call.name, tool_call.arguments)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
                 "Tool execution crashed",

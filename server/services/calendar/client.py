@@ -390,34 +390,62 @@ def get_calendar_access_token() -> Optional[str]:
 
     try:
         client = _get_composio_client()
-        items = client.connected_accounts.list(
-            user_ids=[user_id], toolkit_slugs=[_TOOLKIT_SLUG], statuses=["ACTIVE"]
-        )
-        data = getattr(items, "data", None)
-        if data is None and isinstance(items, dict):
-            data = items.get("data")
-        if not data:
-            return None
+        # The SDK-level client.connected_accounts.list() silently returns empty
+        # in this SDK version; use the underlying HTTP client instead.
+        raw_list = client.client.connected_accounts.list()
 
-        account = data[0]
-        state = getattr(account, "state", None)
-        val = getattr(state, "val", None) if state is not None else None
-        token: Optional[str] = getattr(val, "access_token", None) if val is not None else None
+        settings = get_settings()
+        calendar_auth_config_id = settings.composio_calendar_auth_config_id or ""
+
+        token: Optional[str] = None
+        expiry_seconds = 3600.0
+        all_items = list(raw_list.items)
+        logger.info("get_calendar_access_token: %d accounts total, looking for user_id=%r, auth_config_id=%r",
+                     len(all_items), user_id, calendar_auth_config_id)
+
+        for item in all_items:
+            item_user_id = getattr(item, "user_id", None)
+            if item_user_id != user_id:
+                logger.info("  skip account user_id=%r (want %r)", item_user_id, user_id)
+                continue
+            item_auth_cfg = getattr(item.auth_config, "id", None) if item.auth_config else None
+            if calendar_auth_config_id and item_auth_cfg != calendar_auth_config_id:
+                logger.info("  skip account auth_config=%r (want %r)", item_auth_cfg, calendar_auth_config_id)
+                continue
+            state = getattr(item, "state", None)
+            val = getattr(state, "val", None) if state is not None else None
+            if val is None:
+                logger.info("  skip account: state.val is None (state type=%r)", type(state).__name__)
+                continue
+            val_status = (getattr(val, "status", None) or "").upper()
+            if val_status != "ACTIVE":
+                logger.info("  skip account: val.status=%r", val_status)
+                continue
+            tok = getattr(val, "access_token", None)
+            if tok:
+                token = tok
+                try:
+                    expiry_seconds = float(getattr(val, "expires_in", None) or 3600)
+                except (TypeError, ValueError):
+                    expiry_seconds = 3600.0
+                logger.info("  found token for user_id=%r (expires_in=%.0fs)", user_id, expiry_seconds)
+                break
+            logger.info("  skip account: val.access_token is None/empty")
+
         if not token:
+            logger.warning(
+                "No active calendar token found for user_id=%r "
+                "(total accounts=%d, auth_config_filter=%r)",
+                user_id, len(all_items), calendar_auth_config_id or "none",
+            )
             return None
-
-        try:
-            raw_expiry = getattr(val, "expires_in", None)
-            expiry_seconds = float(raw_expiry) if raw_expiry else 3600.0
-        except (TypeError, ValueError):
-            expiry_seconds = 3600.0
 
         with _TOKEN_CACHE_LOCK:
             _TOKEN_CACHE[user_id] = (token, now + expiry_seconds)
 
         return token
     except Exception as exc:
-        logger.warning("Failed to get calendar access token", extra={"error": str(exc)})
+        logger.exception("Failed to get calendar access token")
         return None
 
 
@@ -471,12 +499,13 @@ def execute_calendar_tool(
 
     try:
         client = _get_composio_client()
-        result = client.client.tools.execute(
-            tool_name,
-            user_id=composio_user_id,
-            arguments=prepared,
-        )
-        return _normalize_tool_response(result)
+        result = client.tools.execute(tool_name, prepared, user_id=composio_user_id, dangerously_skip_version_check=True)
+        if not result.get("successful", True):
+            error_msg = result.get("error") or "Tool execution failed"
+            raise RuntimeError(f"{tool_name} execution failed: {error_msg}")
+        return result.get("data") or {}
+    except RuntimeError:
+        raise
     except Exception as exc:
         logger.exception(
             "calendar tool execution failed",

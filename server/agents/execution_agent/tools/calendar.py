@@ -1,15 +1,16 @@
 """Google Calendar tool schemas and actions for the execution agent.
 
-Data plane: direct Google Calendar REST API via server.services.calendar.google_rest.
-Auth plane: Composio OAuth (connect / disconnect / status) — unchanged.
+Execution: Composio tool execution pipeline (handles OAuth token refresh).
+Auth: Composio OAuth (connect / disconnect / status) — unchanged.
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from server.services.calendar import get_active_calendar_user_id, get_calendar_access_token
-from server.services.calendar import google_rest
+from server.logging_config import logger
+from server.services.calendar import get_active_calendar_user_id
+from server.services.calendar.client import execute_calendar_tool
 
 _SCHEMAS: List[Dict[str, Any]] = [
     {
@@ -267,27 +268,26 @@ def get_schemas() -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Auth helpers
+# Execution helpers
 # ---------------------------------------------------------------------------
 
-def _token_or_error() -> Union[str, Dict[str, Any]]:
-    """Return the live access token or an error dict the runtime will surface as a tool failure."""
-    token = get_calendar_access_token()
-    if token:
-        return token
-    if not get_active_calendar_user_id():
+def _user_id_or_error() -> Union[str, Dict[str, Any]]:
+    user_id = get_active_calendar_user_id()
+    if not user_id:
         return {"error": "Google Calendar not connected. Please connect Calendar in settings first."}
-    return {"error": "Could not retrieve Calendar access token. Try reconnecting Calendar in settings."}
+    return user_id
 
 
-def _run(fn: Callable[..., Dict[str, Any]], **kwargs: Any) -> Dict[str, Any]:
-    """Get a token then call a google_rest function; surface any HTTP errors as error dicts."""
-    tok = _token_or_error()
-    if isinstance(tok, dict):
-        return tok
+def _exec(slug: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    uid = _user_id_or_error()
+    if isinstance(uid, dict):
+        return uid
     try:
-        return fn(tok, **kwargs)
+        result = execute_calendar_tool(slug, uid, arguments=arguments)
+        logger.info("calendar_exec %s OK: %s", slug, str(result)[:200])
+        return result
     except RuntimeError as exc:
+        logger.error("calendar_exec %s FAILED: %s", slug, exc)
         return {"error": str(exc)}
 
 
@@ -304,16 +304,16 @@ def calendar_list_events(
     single_events: Optional[bool] = None,
     order_by: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return _run(
-        google_rest.list_events,
-        calendar_id=calendar_id or "primary",
-        time_min=time_min,
-        time_max=time_max,
-        query=query,
-        max_results=max_results,
-        single_events=True if single_events is None else single_events,
-        order_by=order_by,
-    )
+    # GOOGLECALENDAR_EVENTS_LIST uses camelCase parameter names
+    return _exec("GOOGLECALENDAR_EVENTS_LIST", {
+        "calendarId": calendar_id or "primary",
+        "timeMin": time_min,
+        "timeMax": time_max,
+        "q": query,
+        "maxResults": max_results,
+        "singleEvents": True if single_events is None else single_events,
+        "orderBy": order_by,
+    })
 
 
 def calendar_create_event(
@@ -327,18 +327,17 @@ def calendar_create_event(
     attendees: Optional[List[str]] = None,
     send_updates: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return _run(
-        google_rest.create_event,
-        summary=summary,
-        start_datetime=start_datetime,
-        end_datetime=end_datetime,
-        calendar_id=calendar_id or "primary",
-        description=description,
-        timezone=timezone,
-        location=location,
-        attendees=attendees,
-        send_updates=send_updates,
-    )
+    return _exec("GOOGLECALENDAR_CREATE_EVENT", {
+        "summary": summary,
+        "start_datetime": start_datetime,
+        "end_datetime": end_datetime,
+        "calendar_id": calendar_id or "primary",
+        "description": description,
+        "timezone": timezone,
+        "location": location,
+        "attendees": attendees,
+        "send_updates": send_updates,
+    })
 
 
 def calendar_update_event(
@@ -353,19 +352,19 @@ def calendar_update_event(
     attendees: Optional[List[str]] = None,
     send_updates: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return _run(
-        google_rest.update_event,
-        event_id=event_id,
-        calendar_id=calendar_id or "primary",
-        summary=summary,
-        description=description,
-        start_datetime=start_datetime,
-        end_datetime=end_datetime,
-        timezone=timezone,
-        location=location,
-        attendees=attendees,
-        send_updates=send_updates,
-    )
+    # GOOGLECALENDAR_PATCH_EVENT only requires event_id + calendar_id; uses start_time/end_time
+    return _exec("GOOGLECALENDAR_PATCH_EVENT", {
+        "event_id": event_id,
+        "calendar_id": calendar_id or "primary",
+        "summary": summary,
+        "description": description,
+        "start_time": start_datetime,
+        "end_time": end_datetime,
+        "timezone": timezone,
+        "location": location,
+        "attendees": attendees,
+        "send_updates": send_updates,
+    })
 
 
 def calendar_delete_event(
@@ -373,34 +372,31 @@ def calendar_delete_event(
     calendar_id: Optional[str] = None,
     send_updates: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return _run(
-        google_rest.delete_event,
-        event_id=event_id,
-        calendar_id=calendar_id or "primary",
-        send_updates=send_updates,
-    )
+    return _exec("GOOGLECALENDAR_DELETE_EVENT", {
+        "event_id": event_id,
+        "calendar_id": calendar_id or "primary",
+        "send_updates": send_updates,
+    })
 
 
 def calendar_get_event(
     event_id: str,
     calendar_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return _run(
-        google_rest.get_event,
-        event_id=event_id,
-        calendar_id=calendar_id or "primary",
-    )
+    return _exec("GOOGLECALENDAR_EVENTS_GET", {
+        "event_id": event_id,
+        "calendar_id": calendar_id or "primary",
+    })
 
 
 def calendar_list_calendars(
     min_access_role: Optional[str] = None,
     show_hidden: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    return _run(
-        google_rest.list_calendars,
-        min_access_role=min_access_role,
-        show_hidden=show_hidden,
-    )
+    return _exec("GOOGLECALENDAR_LIST_CALENDARS", {
+        "min_access_role": min_access_role,
+        "show_hidden": show_hidden,
+    })
 
 
 def calendar_find_free_slots(
@@ -409,13 +405,12 @@ def calendar_find_free_slots(
     calendar_ids: Optional[List[str]] = None,
     timezone: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return _run(
-        google_rest.find_free_slots,
-        time_min=time_min,
-        time_max=time_max,
-        calendar_ids=calendar_ids or ["primary"],
-        timezone=timezone,
-    )
+    return _exec("GOOGLECALENDAR_FIND_FREE_SLOTS", {
+        "time_min": time_min,
+        "time_max": time_max,
+        "items": calendar_ids or ["primary"],
+        "timezone": timezone,
+    })
 
 
 def build_registry(agent_name: str) -> Dict[str, Callable[..., Any]]:  # noqa: ARG001
