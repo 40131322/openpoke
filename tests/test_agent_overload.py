@@ -739,7 +739,7 @@ def cmd_diff(base_path: str, branch_path: str) -> None:
         pairs = [(s, s) for s in common]
 
     for sa, sb in pairs:
-        print(f"\n=== delta: BRANCH[{sb}] − BASE[{sa}] "
+        print(f"\n=== delta: BRANCH[{sb}] - BASE[{sa}] "
               f"(positive accuracy / negative spawn = win) ===")
         print(f"{'N':>6}  {'d_accuracy':>10}  {'d_spawn':>8}  {'d_recall':>8}  {'d_tokens':>9}")
         sizes = sorted(set(int(k) for k in A['results'][sa]) & set(int(k) for k in B['results'][sb]))
