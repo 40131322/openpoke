@@ -45,15 +45,17 @@ def _render_conversation_history(transcript: str) -> str:
 def _render_active_agents() -> str:
     roster = get_agent_roster()
     roster.load()
-    agents = roster.get_agents()
+    records = roster.get_records()
 
-    if not agents:
+    if not records:
         return "None"
 
     rendered: List[str] = []
-    for agent_name in agents:
-        name = escape(agent_name or "agent", quote=True)
-        rendered.append(f'<agent name="{name}" />')
+    for r in records:
+        agent_id = escape(r.get("id") or "", quote=True)
+        name = escape(r.get("name") or "agent", quote=True)
+        purpose = escape(r.get("purpose") or "")
+        rendered.append(f'<agent id="{agent_id}" name="{name}">{purpose}</agent>')
 
     return "\n".join(rendered)
 

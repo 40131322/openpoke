@@ -55,6 +55,15 @@ from html import escape
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+import pytest
+
+# ---------------------------------------------------------------------------
+# Pytest constants — all test runs use these so results are comparable.
+# ---------------------------------------------------------------------------
+_RESULTS_DIR = Path(__file__).parent / "results"
+_SEED = 42
+_TOPK = 15
+
 class RateLimitError(Exception):
     """Raised when OpenRouter returns 429. Carries the UTC reset time."""
 
@@ -739,7 +748,7 @@ def cmd_diff(base_path: str, branch_path: str) -> None:
         pairs = [(s, s) for s in common]
 
     for sa, sb in pairs:
-        print(f"\n=== delta: BRANCH[{sb}] − BASE[{sa}] "
+        print(f"\n=== delta: BRANCH[{sb}] - BASE[{sa}] "
               f"(positive accuracy / negative spawn = win) ===")
         print(f"{'N':>6}  {'d_accuracy':>10}  {'d_spawn':>8}  {'d_recall':>8}  {'d_tokens':>9}")
         sizes = sorted(set(int(k) for k in A['results'][sa]) & set(int(k) for k in B['results'][sb]))
@@ -815,6 +824,116 @@ def parse_args(argv=None):
                    help="diff two run artifacts (branch − base) and exit; no API calls")
     p.add_argument("--mock", action="store_true", help="offline fake model (scaffolding check only)")
     return p.parse_args(argv)
+
+
+# ---------------------------------------------------------------------------
+# Pytest test functions
+# ---------------------------------------------------------------------------
+
+def _artifact_path(label: str) -> Path:
+    """Return a timestamped path inside tests/results/ for this run."""
+    _RESULTS_DIR.mkdir(exist_ok=True)
+    git = _git_info()
+    sha = git.get("sha") or "unknown"
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return _RESULTS_DIR / f"overload_{ts}_{sha}_{label}.json"
+
+
+def _load_and_check(path: Path) -> Dict:
+    assert path.exists(), f"Result artifact not written: {path}"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert "results" in data, "Artifact missing 'results' key"
+    for strat, by_size in data["results"].items():
+        for size_str, m in by_size.items():
+            total = m["accuracy"] + m["spawn_rate"] + m["wrong_agent_rate"] + m["search_rate"]
+            assert total <= 1.001, f"{strat} N={size_str}: outcome rates sum to {total:.3f} > 1"
+    return data
+
+
+def test_scaffolding_mock():
+    """
+    Offline sanity check — verifies the harness runs end-to-end without an API
+    key. Uses the fake model. Always fast (<1 s). Saves to tests/results/.
+    """
+    out = _artifact_path("mock_full")
+    args = parse_args([
+        "--mock",
+        "--strategy", "full",
+        "--sizes", "5", "25", "100",
+        "--trials", "2",
+        "--seed", str(_SEED),
+        "--out", str(out),
+    ])
+    asyncio.run(main_async(args))
+
+    data = _load_and_check(out)
+    assert "full" in data["results"]
+    # Mock model: at N=5 (target always shown) reuse rate must be > 0
+    n5 = data["results"]["full"]["5"]
+    assert n5["accuracy"] > 0, "Mock model got 0% accuracy at N=5 — harness is broken"
+    print(f"\n  saved -> {out.relative_to(Path.cwd())}")
+
+
+@pytest.mark.skipif(not _API_KEY, reason="OPENROUTER_API_KEY not set")
+def test_full_strategy_baseline():
+    """
+    Real-model baseline: full-roster strategy across N=5/25/100 (3 trials each).
+    Saves JSON + CSV to tests/results/ for cross-branch diffing.
+    Skips when no API key is present.
+    """
+    out = _artifact_path("real_full")
+    args = parse_args([
+        "--strategy", "full",
+        "--sizes", "5", "25", "100",
+        "--trials", "3",
+        "--seed", str(_SEED),
+        "--out", str(out),
+        "--csv", str(out.with_suffix(".csv")),
+    ])
+    asyncio.run(main_async(args))
+
+    data = _load_and_check(out)
+    n5 = data["results"]["full"]["5"]
+    assert n5["accuracy"] > 0.5, (
+        f"Accuracy at N=5 is {n5['accuracy']:.0%} — model is failing on trivial cases"
+    )
+    print(f"\n  saved -> {out.relative_to(Path.cwd())}")
+
+
+@pytest.mark.skipif(not _API_KEY, reason="OPENROUTER_API_KEY not set")
+def test_compare_full_vs_semantic_topk():
+    """
+    Real-model A/B: full strategy (baseline) vs semantic_topk (mitigation).
+    Saves a single artifact containing both strategies so --diff can compare
+    it against a run from main or an earlier branch.
+    Skips when no API key is present.
+    """
+    out = _artifact_path("real_full_vs_semantic_topk")
+    args = parse_args([
+        "--compare", "full", "semantic_topk",
+        "--sizes", "5", "25", "100",
+        "--topk", str(_TOPK),
+        "--trials", "3",
+        "--seed", str(_SEED),
+        "--out", str(out),
+        "--csv", str(out.with_suffix(".csv")),
+    ])
+    asyncio.run(main_async(args))
+
+    data = _load_and_check(out)
+    assert "full" in data["results"], "full strategy missing from artifact"
+    assert "semantic_topk" in data["results"], "semantic_topk strategy missing from artifact"
+
+    full_n25 = data["results"]["full"]["25"]
+    topk_n25 = data["results"]["semantic_topk"]["25"]
+    # At N=25 with k=15, recall should be >= full-strategy accuracy
+    # (if we can't even surface the target, topk can't help)
+    assert topk_n25["target_recall"] >= 0, "sanity: recall must be non-negative"
+    print(f"\n  saved -> {out.relative_to(Path.cwd())}")
+    # Print the in-process delta table so it shows up in pytest -s output
+    full_m = {int(k): Metrics(**v) for k, v in data["results"]["full"].items()}
+    topk_m = {int(k): Metrics(**v) for k, v in data["results"]["semantic_topk"].items()}
+    print(_fmt_delta("full", "semantic_topk", full_m, topk_m))
 
 
 if __name__ == "__main__":

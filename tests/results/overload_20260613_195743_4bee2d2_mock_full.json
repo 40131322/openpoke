@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "sha": "4bee2d2",
+    "branch": "agent-solution",
+    "dirty": true,
+    "model": "google/gemini-3.5-flash",
+    "seed": 42,
+    "topk": 15,
+    "trials": 2,
+    "sizes": [
+      5,
+      25,
+      100
+    ],
+    "target_recency": 2
+  },
+  "results": {
+    "full": {
+      "5": {
+        "n": 10,
+        "accuracy": 0.8,
+        "spawn_rate": 0.1,
+        "wrong_agent_rate": 0.1,
+        "search_rate": 0.0,
+        "target_recall": 1.0,
+        "avg_prompt_tokens": 2972.6
+      },
+      "25": {
+        "n": 10,
+        "accuracy": 0.2,
+        "spawn_rate": 0.7,
+        "wrong_agent_rate": 0.1,
+        "search_rate": 0.0,
+        "target_recall": 1.0,
+        "avg_prompt_tokens": 3424.6
+      },
+      "100": {
+        "n": 10,
+        "accuracy": 0.4,
+        "spawn_rate": 0.4,
+        "wrong_agent_rate": 0.2,
+        "search_rate": 0.0,
+        "target_recall": 1.0,
+        "avg_prompt_tokens": 5010.4
+      }
+    }
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "meta": {
+    "sha": "4bee2d2",
+    "branch": "agent-solution",
+    "dirty": true,
+    "model": "google/gemini-3.5-flash",
+    "seed": 42,
+    "topk": 15,
+    "trials": 3,
+    "sizes": [
+      5,
+      25,
+      100
+    ],
+    "target_recency": 2
+  },
+  "results": {
+    "full": {
+      "5": {
+        "n": 15,
+        "accuracy": 1.0,
+        "spawn_rate": 0.0,
+        "wrong_agent_rate": 0.0,
+        "search_rate": 0.0,
+        "target_recall": 1.0,
+        "avg_prompt_tokens": 2972.6
+      },
+      "25": {
+        "n": 15,
+        "accuracy": 1.0,
+        "spawn_rate": 0.0,
+        "wrong_agent_rate": 0.0,
+        "search_rate": 0.0,
+        "target_recall": 1.0,
+        "avg_prompt_tokens": 3424.6
+      },
+      "100": {
+        "n": 15,
+        "accuracy": 1.0,
+        "spawn_rate": 0.0,
+        "wrong_agent_rate": 0.0,
+        "search_rate": 0.0,
+        "target_recall": 1.0,
+        "avg_prompt_tokens": 5010.4
+      }
+    },
+    "semantic_topk": {
+      "5": {
+        "n": 15,
+        "accuracy": 1.0,
+        "spawn_rate": 0.0,
+        "wrong_agent_rate": 0.0,
+        "search_rate": 0.0,
+        "target_recall": 1.0,
+        "avg_prompt_tokens": 2972.6
+      },
+      "25": {
+        "n": 15,
+        "accuracy": 1.0,
+        "spawn_rate": 0.0,
+        "wrong_agent_rate": 0.0,
+        "search_rate": 0.0,
+        "target_recall": 1.0,
+        "avg_prompt_tokens": 3202.4666666666667
+      },
+      "100": {
+        "n": 15,
+        "accuracy": 1.0,
+        "spawn_rate": 0.0,
+        "wrong_agent_rate": 0.0,
+        "search_rate": 0.0,
+        "target_recall": 1.0,
+        "avg_prompt_tokens": 3191.133333333333
+      }
+    }
+  }
+}

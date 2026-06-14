@@ -1,0 +1,7 @@
+branch,sha,dirty,model,strategy,roster_size,topk,trials,target_recency_days,seed,n_trials,accuracy,spawn_rate,wrong_agent_rate,search_rate,target_recall,avg_prompt_tokens
+agent-solution,4bee2d2,True,google/gemini-3.5-flash,full,5,15,3,2,42,15,1.0,0.0,0.0,0.0,1.0,2972.6
+agent-solution,4bee2d2,True,google/gemini-3.5-flash,full,25,15,3,2,42,15,1.0,0.0,0.0,0.0,1.0,3424.6
+agent-solution,4bee2d2,True,google/gemini-3.5-flash,full,100,15,3,2,42,15,1.0,0.0,0.0,0.0,1.0,5010.4
+agent-solution,4bee2d2,True,google/gemini-3.5-flash,semantic_topk,5,15,3,2,42,15,1.0,0.0,0.0,0.0,1.0,2972.6
+agent-solution,4bee2d2,True,google/gemini-3.5-flash,semantic_topk,25,15,3,2,42,15,1.0,0.0,0.0,0.0,1.0,3202.5
+agent-solution,4bee2d2,True,google/gemini-3.5-flash,semantic_topk,100,15,3,2,42,15,1.0,0.0,0.0,0.0,1.0,3191.1

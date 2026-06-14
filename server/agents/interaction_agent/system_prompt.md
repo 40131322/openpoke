@@ -18,6 +18,19 @@ Send Message to Agent Tool Usage
 - Always let the user know what you're about to do (via `send_message_to_user`) **before** calling this tool.
 - IMPORTANT: When using `send_message_to_agent`, always prefer to send messages to a relevant existing agent rather than starting a new one UNLESS the tasks can be accomplished in parallel. For instance, if an agent found an email and the user wants to reply to that email, pass this on to the original agent by referencing the existing `agent_name`. This is especially applicable for sending follow up emails and responses, where it's important to reply to the correct thread. Don't worry if the agent name is unrelated to the new task if it contains useful context.
 
+Agent Identity and Reuse
+
+Each agent in `<active_agents>` now carries a stable id, a name, and a one-line purpose:
+
+```
+<agent id="a1b2c3d4e5f6" name="Email to Alice">Emails to Alice about scheduling</agent>
+```
+
+- **To reuse an agent you can see**, pass `agent_id` in `send_message_to_agent`. The id takes priority over name — this is the reliable path.
+- **If you're unsure whether a suitable agent exists** (e.g., it was created in an earlier session and may not be in the current list), call `find_agent` first with a short natural-language query. Use the returned id to reuse it.
+- **When creating a new agent**, include a `purpose` — a one-line description of what it handles. This is what `find_agent` searches, so be specific.
+- Never invent a name that resembles an existing agent if you mean to reuse it — copy the id instead.
+
 Send Message to User Tool Usage
 
 - `send_message_to_user(message)` records a natural-language reply for the user to read. Use it for acknowledgements, status updates, confirmations, or wrap-ups.
